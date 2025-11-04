@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Employee Identification App</title>
+    <title>Employee Identification App </title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/appwrite@11.0.1/dist/umd/index.js"></script>
     <style>
@@ -192,8 +192,6 @@
 
     <script type="module">
         // Import necessary modules from the globally loaded Appwrite SDK
-        // Since we loaded the UMD version, the Appwrite object should be global.
-        // We use destructuring for cleaner code, assuming modern browser support for modules.
         const { Client, Account, Databases, Storage, ID, Query, Permission, Role } = Appwrite;
 
         // --- ⚠️ APPWRITE CONFIGURATION CONSTANTS (REPLACE THESE) ⚠️ ---
@@ -218,9 +216,8 @@
         let userId = null; 
         let currentUserRole = null;
         let employees = []; 
-        let lastSerialId = 0; // Appwrite uses its own ID, but this tracks a counter for bulk/serial data 
+        let lastSerialId = 0; 
         
-
         // UI elements (These remain the same)
         const loadingElement = document.getElementById('loading');
         const authScreen = document.getElementById('authScreen');
@@ -304,8 +301,6 @@
                 
             } catch (error) {
                 // Role document does not exist. Default to 'user'.
-                // The Super Admin role must be assigned manually in the Appwrite console 
-                // for the first user by updating the 'user_roles' collection.
                 currentUserRole = 'user'; 
             }
             
@@ -340,11 +335,22 @@
             } catch (signInError) {
                 // 2. If sign in fails, try to create account (Registration)
                 try {
-                    // Appwrite requires password to be 8-256 chars 
-                    await account.create(ID.unique(), email, password, email.split('@')[0]); 
+                    const newUserId = ID.unique();
+                    // Create the user account
+                    await account.create(newUserId, email, password, email.split('@')[0]); 
                     
-                    // Log in immediately after successful registration
+                    // Log in immediately after registration
                     await account.createEmailPasswordSession(email, password); 
+
+                    // --- ADDED LOGIC: Create the initial default 'user' role document ---
+                    await databases.createDocument(
+                        EMPLOYEE_DATABASE_ID,
+                        ROLES_COLLECTION_ID,
+                        newUserId, // Use the new user's ID as the Document ID
+                        { role: 'user' }, // Assign the default 'user' role
+                        [Permission.read(Role.any()), Permission.write(Role.user(newUserId))]
+                    );
+                    // --- END ADDED LOGIC ---
 
                     authMessage.textContent = 'Account created successfully. Logging in...';
                     await checkUserSession(); // Reload session and role
@@ -374,7 +380,6 @@
          * Configures the enrollment and user management tabs based on the user's role. (Logic Unchanged)
          */
         function configureAdminTools(role) {
-            // ... (Logic remains largely the same)
             const tabs = document.querySelectorAll('.tab-button');
             const userMgmtTabButton = document.querySelector('[data-tab="usermanagement"]');
             
@@ -397,8 +402,6 @@
 
         /**
          * Handles creation of new users by Super Admins or Admins.
-         * NOTE: Creating roles in Appwrite requires a Server SDK or Function to modify User metadata, 
-         * which is beyond the scope of this client-side code. This is a simplified client-side registration.
          */
         window.handleUserCreation = async function(event) {
             event.preventDefault();
@@ -426,13 +429,14 @@
 
             try {
                 // 1. Create user in Appwrite Auth
-                await account.create(ID.unique(), email, password, email.split('@')[0]);
+                const newUserId = ID.unique();
+                await account.create(newUserId, email, password, email.split('@')[0]);
                 
-                // 2. Assign the role in the Appwrite Database (This assumes RLS is set to allow admins to write)
+                // 2. Assign the role in the Appwrite Database 
                 await databases.createDocument(
                     EMPLOYEE_DATABASE_ID,
                     ROLES_COLLECTION_ID,
-                    email, // Use email as Document ID or find new user ID after creation
+                    newUserId, // Use the new user's ID as the Document ID
                     { role: role, createdBy: userId },
                     [Permission.read(Role.any()), Permission.write(Role.user(userId))]
                 );
@@ -460,7 +464,6 @@
                 `databases.${EMPLOYEE_DATABASE_ID}.collections.${EMPLOYEE_COLLECTION_ID}.documents`, 
                 (response) => {
                     // This callback fires on any change (create, update, delete)
-                    // We must reload the full list on change, as Appwrite payload structure is different from Firestore's snapshot
                     console.log("Realtime update received. Reloading data...");
                     fetchEmployees();
                 }
@@ -486,7 +489,6 @@
                 // Manually calculate max serial ID (Appwrite does not have auto-incrementing integers)
                 let maxSerial = 0;
                 employees.forEach(doc => {
-                    // Assuming you create a custom 'serialId' attribute that holds the number
                     const serialId = doc.serialId || 0; 
                     if (serialId > maxSerial) maxSerial = serialId;
                 });
@@ -628,10 +630,82 @@
          */
         window.filterEmployees = function() {
             const query = document.getElementById('searchQuery').value.toLowerCase().trim();
-            // ... (rest of the filtering and rendering logic) ...
+            
+            const filtered = employees.filter(emp => {
+                const serialIdStr = String(emp.serialId);
+                const optionalId = emp.employeeIdOptional ? emp.employeeIdOptional.toLowerCase() : '';
+                const nationalId = emp.nationalId ? emp.nationalId.toLowerCase() : ''; 
+                
+                return serialIdStr.includes(query) ||
+                       optionalId.includes(query) ||
+                       nationalId.includes(query) || 
+                       emp.englishName.toLowerCase().includes(query) || 
+                       emp.bengaliName.toLowerCase().includes(query) ||
+                       emp.designation.toLowerCase().includes(query) ||
+                       emp.factoryName.toLowerCase().includes(query);
+            });
+
+            employeeList.innerHTML = '';
+            if (filtered.length === 0 && employees.length > 0) {
+                employeeList.innerHTML = '<p class="text-center col-span-full text-red-500 font-medium mt-4">No matching records found.</p>';
+                document.getElementById('emptyMessage').classList.add('hidden');
+            } else if (employees.length === 0) {
+                 document.getElementById('emptyMessage').classList.remove('hidden');
+            } else {
+                 filtered.forEach(emp => {
+                    employeeList.innerHTML += createEmployeeCard(emp);
+                });
+                document.getElementById('emptyMessage').classList.add('hidden');
+            }
         }
         
-        // ... (changeTab and previewImage functions remain the same) ...
+        /**
+         * Switches between the Single Entry and Bulk Entry tabs.
+         */
+        window.changeTab = function(tabName) {
+            const tabs = document.querySelectorAll('.tab-content');
+            const buttons = document.querySelectorAll('.tab-button');
+            const requiredRoles = {
+                'single': ['super_admin', 'admin'],
+                'bulk': ['super_admin', 'admin'],
+                'usermanagement': ['super_admin', 'admin']
+            };
+
+            tabs.forEach(tab => {
+                tab.style.display = 'none';
+            });
+            buttons.forEach(button => {
+                button.classList.remove('border-blue-600', 'text-blue-600', 'font-bold');
+                button.classList.add('border-transparent', 'text-gray-500');
+            });
+
+            if (requiredRoles[tabName] && !requiredRoles[tabName].includes(currentUserRole)) {
+                 return;
+            }
+
+            const targetTab = document.getElementById(`tab-${tabName}`);
+            const targetButton = document.querySelector(`.tab-button[data-tab="${tabName}"]`);
+
+            if (targetTab) targetTab.style.display = 'block';
+            if (targetButton) {
+                targetButton.classList.add('border-blue-600', 'text-blue-600', 'font-bold');
+                targetButton.classList.remove('border-transparent', 'text-gray-500');
+            }
+        }
+
+        /**
+         * Previews the selected image file.
+         */
+        window.previewImage = function(event) {
+            const reader = new FileReader();
+            reader.onload = function(){
+                const output = document.getElementById('imagePreview');
+                output.src = reader.result;
+            };
+            if (event.target.files[0]) {
+                reader.readAsDataURL(event.target.files[0]);
+            }
+        }
 
         // Start the application
         window.onload = initAppwrite;
