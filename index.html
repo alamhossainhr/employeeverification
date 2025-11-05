@@ -317,6 +317,8 @@
 
         /**
          * Handles Sign In or Sign Up based on attempt.
+         * REVISED: Ensures we get the logged-in user ID immediately after creating the account 
+         * before trying to create the role document.
          */
         window.handleAuthSubmit = async function(event) {
             event.preventDefault();
@@ -330,27 +332,35 @@
                 // 1. Try to sign in (Create Email Session)
                 await account.createEmailPasswordSession(email, password);
                 authMessage.textContent = 'Sign in successful. Checking role...';
-                await checkUserSession(); // Reload session and role
+                
+                // --- Action: Check session and continue normally ---
+                await checkUserSession(); 
                 
             } catch (signInError) {
+                
                 // 2. If sign in fails, try to create account (Registration)
                 try {
-                    const newUserId = ID.unique();
-                    // Create the user account
-                    await account.create(newUserId, email, password, email.split('@')[0]); 
+                    const tempUserId = ID.unique(); // Generate a temporary ID for creation
                     
-                    // Log in immediately after registration
+                    // Create the user account (Appwrite requires password to be 8-256 chars)
+                    await account.create(tempUserId, email, password, email.split('@')[0]); 
+                    
+                    // Log in immediately after successful registration
                     await account.createEmailPasswordSession(email, password); 
+                    
+                    // --- Get the definitive User ID after logging in ---
+                    const loggedInUser = await account.get();
+                    const actualUserId = loggedInUser.$id;
 
-                    // --- ADDED LOGIC: Create the initial default 'user' role document ---
+                    // --- Action: Create the initial default 'user' role document ---
                     await databases.createDocument(
                         EMPLOYEE_DATABASE_ID,
                         ROLES_COLLECTION_ID,
-                        newUserId, // Use the new user's ID as the Document ID
+                        actualUserId, // Use the definitive User ID as the Document ID
                         { role: 'user' }, // Assign the default 'user' role
-                        [Permission.read(Role.any()), Permission.write(Role.user(newUserId))]
+                        [Permission.read(Role.any()), Permission.write(Role.user(actualUserId))]
                     );
-                    // --- END ADDED LOGIC ---
+                    // --- End Action ---
 
                     authMessage.textContent = 'Account created successfully. Logging in...';
                     await checkUserSession(); // Reload session and role
